@@ -1,5 +1,8 @@
 # Table Planner Bot
 
+DISCLAIMER: This is merely an experiment to, finally, get myself into Python. So the code quality might
+be bad, buggy and outrigth scary!
+
 A Discord bot to organize game tables for tabletop RPGs, miniatures, and similar sessions. GMs can post tables via slash commands, players can join via buttons, and all sign-ups persist across restarts.
 
 ## Features
