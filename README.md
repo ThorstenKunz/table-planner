@@ -58,6 +58,7 @@ Configuration is stored in data/config.json. The bot reads it on startup.
 
 Example:
 
+```json
 {
   "list_tables": {
     "column_widths": {
@@ -83,6 +84,7 @@ Example:
     "guild_command_window_seconds": 10
   }
 }
+```
 
 Notes:
 - Column widths affect the monospace table output for /list-tables and /my-tables.
