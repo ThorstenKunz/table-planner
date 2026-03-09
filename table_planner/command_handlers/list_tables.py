@@ -11,6 +11,7 @@ from discord.utils import escape_markdown, escape_mentions
 from ..config import get_list_table_column_widths
 from ..discord_utils import safe_followup_send, safe_response_send
 from ..storage import load_active_tables
+from ..table_access import get_gm_id
 from .utils import check_guild_rate_limit, check_user_rate_limit, filter_tables_for_dm, format_cell, resolve_gm_name
 
 logger = logging.getLogger(__name__)
@@ -108,7 +109,7 @@ def register_list_tables(tree: discord.app_commands.CommandTree, bot: discord.Cl
         for table_id, info in sorted_items:
             safe_system = escape_mentions(escape_markdown(info["system"]))
             safe_schedule = escape_mentions(escape_markdown(info["schedule"]))
-            gm_display = await resolve_gm_name(bot, info["creator_id"], info["guild_id"], gm_name_cache)
+            gm_display = await resolve_gm_name(bot, get_gm_id(info), info["guild_id"], gm_name_cache)
             wait_count = len(info.get("waitlist", []))
             seats = f"{len(info['players'])}/{info['max_players']}"
             if wait_count:

@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 
 import discord
 
+from .table_access import can_manage_table, get_gm_id, get_table_channel, resolve_table_member
 from .discord_utils import safe_followup_send
 from .storage import load_tables, save_tables
 from .types import PlayerEntry, TableData
@@ -37,9 +38,11 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
         max_length=1000
     )
 
-    def __init__(self, bot: discord.Client) -> None:
+    def __init__(self, bot: discord.Client, creator_id: int, gm_id: int) -> None:
         super().__init__()
         self.bot = bot
+        self.creator_id = creator_id
+        self.gm_id = gm_id
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         user = interaction.user
@@ -106,7 +109,8 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
             "max_players": max_players_int,
             "players": [],
             "waitlist": [],
-            "creator_id": user.id,
+            "creator_id": self.creator_id,
+            "gm_id": self.gm_id,
             "message_id": 0,
             "channel_id": 0,
             "guild_id": interaction.guild_id or 0,
@@ -163,7 +167,13 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
 
         active_tables[table_id] = new_table
         save_tables(active_tables, archived_tables)
-        logger.info("New table %s created by %s (%s).", table_id, user, user.id)
+        logger.info(
+            "New table %s created by %s (%s) with GM %s.",
+            table_id,
+            user,
+            user.id,
+            self.gm_id,
+        )
 
         await safe_followup_send(
             interaction,
@@ -205,8 +215,13 @@ class EditTableModal(discord.ui.Modal):
             label="Max Number of Players",
             default=str(table_data["max_players"])
         )
+        self.gm = discord.ui.TextInput(
+            label="GM (mention or user ID)",
+            default=str(get_gm_id(table_data)),
+            max_length=32,
+        )
 
-        for component in (self.system, self.schedule, self.max_players, self.infos):
+        for component in (self.system, self.schedule, self.max_players, self.gm, self.infos):
             self.add_item(component)
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
@@ -271,10 +286,33 @@ class EditTableModal(discord.ui.Modal):
             await safe_followup_send(interaction, "This table no longer exists or was archived.", ephemeral=True)
             return
 
+        if not await can_manage_table(self.bot, table_data, user.id):
+            await safe_followup_send(interaction, "You are not allowed to edit this table.", ephemeral=True)
+            return
+
+        new_gm = await resolve_table_member(self.bot, table_data, self.gm.value)
+        if new_gm is None:
+            await safe_followup_send(
+                interaction,
+                "The GM must be a valid member mention or user ID from this server.",
+                ephemeral=True,
+            )
+            return
+
+        channel = await get_table_channel(self.bot, table_data["channel_id"])
+        if channel is None or not channel.permissions_for(new_gm).view_channel:
+            await safe_followup_send(
+                interaction,
+                "The selected GM cannot access the table channel.",
+                ephemeral=True,
+            )
+            return
+
         table_data["system"] = system_value
         table_data["schedule"] = schedule_value
         table_data["infos"] = infos_value
         table_data["max_players"] = max_players_int
+        table_data["gm_id"] = new_gm.id
 
         moved_to_waitlist: list[PlayerEntry] = []
         players = list(table_data["players"])
@@ -295,7 +333,7 @@ class EditTableModal(discord.ui.Modal):
         embed = create_table_embed(table_data, self.table_id)
         view = SignupView(self.table_id, table_data["max_players"])
 
-        channel = self.bot.get_channel(table_data["channel_id"])
+        channel = await get_table_channel(self.bot, table_data["channel_id"])
         message_updated = False
         if isinstance(channel, discord.TextChannel):
             try:

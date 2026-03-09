@@ -26,6 +26,7 @@ class TableData(TypedDict):
     players: List[PlayerEntry]
     waitlist: List[PlayerEntry]
     creator_id: int
+    gm_id: NotRequired[int | None]
     message_id: int
     channel_id: int
     guild_id: int

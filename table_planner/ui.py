@@ -3,6 +3,7 @@
 import discord
 from discord.utils import escape_markdown, escape_mentions
 
+from .table_access import get_gm_id
 from .types import TableData
 
 
@@ -14,7 +15,7 @@ def create_table_embed(table_data: TableData, table_id: str, resolvable_ids: set
 
     embed = discord.Embed(title=f"🎲 {safe_system}", color=discord.Color.dark_purple())
     embed.add_field(name="⏰ Schedule", value=safe_schedule, inline=True)
-    embed.add_field(name="🧙 GM", value=f"<@{table_data['creator_id']}>", inline=True)
+    embed.add_field(name="🧙 GM", value=f"<@{get_gm_id(table_data)}>", inline=True)
     embed.add_field(name="📜 Infos", value=safe_infos, inline=False)
 
     players = table_data["players"]

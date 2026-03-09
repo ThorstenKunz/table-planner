@@ -8,6 +8,7 @@ import discord
 
 from ..discord_utils import safe_response_send
 from ..storage import load_active_tables
+from ..table_access import can_manage_table
 from ..types import TableData
 from ..views import ArchiveView
 
@@ -23,24 +24,14 @@ def register_archive_table(tree: discord.app_commands.CommandTree, bot: discord.
 
         user_tables: dict[str, TableData] = {}
         for table_id, info in data.items():
-            if info["creator_id"] == user.id:
+            if await can_manage_table(bot, info, user.id):
                 user_tables[table_id] = info
-                continue
-
-            channel = bot.get_channel(info["channel_id"])
-            if isinstance(channel, discord.TextChannel):
-                member = channel.guild.get_member(user.id)
-                if member is None:
-                    continue
-                permissions = channel.permissions_for(member)
-                if permissions.manage_messages:
-                    user_tables[table_id] = info
 
         if not user_tables:
             logger.info("User %s (%s) tried to archive but lacks eligible tables.", user, user.id)
             await safe_response_send(
                 interaction,
-                "You have no active tables you can archive.",
+                "You have no active tables you can manage.",
                 ephemeral=True,
             )
             return

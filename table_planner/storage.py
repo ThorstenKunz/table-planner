@@ -15,6 +15,7 @@ except ImportError:  # pragma: no cover - non-POSIX fallback
     fcntl = None
 
 from .types import ArchiveReason, TableData, TablesDB
+from .table_access import normalize_table_record
 
 logger = logging.getLogger(__name__)
 
@@ -59,6 +60,7 @@ def _read_json(path: str) -> TablesDB:
         if not isinstance(value, dict):
             continue
         entry: dict[str, Any] = dict(value)
+        entry = normalize_table_record(entry)
         reason = entry["archive_reason"]
         entry["archive_reason"] = ArchiveReason(reason) if reason is not None else None
         normalized[key] = cast(TableData, entry)
@@ -112,6 +114,7 @@ def save_tables(active: TablesDB, archived: TablesDB) -> None:
     normalized_active: TablesDB = {}
     for key, value in active.items():
         entry = dict(value)
+        entry = normalize_table_record(entry)
         entry["archive_reason"] = None
         normalized_active[key] = cast(TableData, entry)
 

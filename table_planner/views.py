@@ -10,6 +10,7 @@ import discord
 
 from .discord_utils import safe_followup_send, safe_response_send
 from .storage import load_tables, save_tables
+from .table_access import can_manage_table, is_table_owner
 from .types import ArchiveReason, PlayerEntry, TableData
 from .ui import create_table_embed
 
@@ -406,25 +407,17 @@ class ArchiveView(discord.ui.View):
             await safe_followup_send(interaction, "This table cannot be archived.", ephemeral=True)
             return
 
-        reason = ArchiveReason.OWNER
-        if interaction.user.id != table_data["creator_id"]:
-            channel = self.bot.get_channel(table_data["channel_id"])
-            has_permission = False
-            if isinstance(channel, discord.TextChannel):
-                member = channel.guild.get_member(interaction.user.id)
-                if member is not None:
-                    permissions = channel.permissions_for(member)
-                    has_permission = permissions.manage_messages
-            if not has_permission:
-                logger.warning(
-                    "User %s (%s) lacks permission to archive table %s.",
-                    interaction.user,
-                    interaction.user.id,
-                    table_id,
-                )
-                await safe_followup_send(interaction, "You are not allowed to archive this table.", ephemeral=True)
-                return
-            reason = ArchiveReason.MOD
+        if not await can_manage_table(self.bot, table_data, interaction.user.id):
+            logger.warning(
+                "User %s (%s) lacks permission to archive table %s.",
+                interaction.user,
+                interaction.user.id,
+                table_id,
+            )
+            await safe_followup_send(interaction, "You are not allowed to archive this table.", ephemeral=True)
+            return
+
+        reason = ArchiveReason.OWNER if is_table_owner(interaction.user.id, table_data) else ArchiveReason.MOD
 
         table_data["archive_reason"] = reason
         active_tables.pop(table_id, None)

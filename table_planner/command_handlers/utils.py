@@ -9,6 +9,7 @@ from typing import Deque, Dict
 import discord
 
 from ..config import get_guild_command_rate_limit, get_user_command_rate_limit
+from ..table_access import get_gm_id, is_table_owner, resolve_guild_member
 from ..types import TableData
 
 _user_rate_limits: dict[int, Deque[datetime]] = {}
@@ -78,12 +79,9 @@ async def filter_tables_for_dm(
         guild = client.get_guild(info["guild_id"])
         if guild is None:
             continue
-        member = guild.get_member(user.id)
+        member = await resolve_guild_member(guild, user.id)
         if member is None:
-            try:
-                member = await guild.fetch_member(user.id)
-            except (discord.HTTPException, discord.Forbidden, discord.NotFound):
-                continue
+            continue
         channel_obj = guild.get_channel(info["channel_id"])
         if not isinstance(channel_obj, discord.TextChannel):
             continue
@@ -124,6 +122,16 @@ async def resolve_gm_name(
 
     gm_name_cache[user_id] = display
     return display
+
+
+def table_owner_status(user_id: int, table_data: TableData) -> str | None:
+    if not is_table_owner(user_id, table_data):
+        return None
+    if user_id == table_data["creator_id"] and user_id == get_gm_id(table_data):
+        return "Owner/GM"
+    if user_id == get_gm_id(table_data):
+        return "GM"
+    return "Owner"
 
 
 def format_cell(value: str, width: int) -> str:

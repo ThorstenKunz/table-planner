@@ -14,6 +14,7 @@ def _sample_table() -> TableData:
         "players": [],
         "waitlist": [],
         "creator_id": 123,
+        "gm_id": 123,
         "message_id": 456,
         "channel_id": 789,
         "guild_id": 101112,
@@ -39,6 +40,7 @@ def test_save_and_load_tables(tmp_path: Path, monkeypatch) -> None:
 
     loaded_active, loaded_archived = storage.load_tables()
     assert loaded_active["table-1"]["system"] == "Test System"
+    assert loaded_active["table-1"].get("gm_id") == 123
     assert loaded_archived["table-2"]["archive_reason"] == ArchiveReason.OWNER
 
 
@@ -58,3 +60,78 @@ def test_archive_tables_moves_records(tmp_path: Path, monkeypatch) -> None:
     loaded_active, loaded_archived = storage.load_tables()
     assert "table-1" not in loaded_active
     assert loaded_archived["table-1"]["archive_reason"] == ArchiveReason.KICK
+
+
+def test_load_tables_falls_back_to_creator_when_gm_missing(tmp_path: Path, monkeypatch) -> None:
+    active_path = tmp_path / "active.json"
+    archived_path = tmp_path / "archived.json"
+
+    monkeypatch.setattr(storage, "ACTIVE_DATA_FILE", str(active_path))
+    monkeypatch.setattr(storage, "ARCHIVED_DATA_FILE", str(archived_path))
+
+    active_path.write_text(
+        """
+{
+    "table-1": {
+        "system": "Test System",
+        "infos": "Test",
+        "schedule": "Soon",
+        "created_at": "2025-01-01T00:00:00Z",
+        "max_players": 4,
+        "players": [],
+        "waitlist": [],
+        "creator_id": 123,
+        "message_id": 456,
+        "channel_id": 789,
+        "guild_id": 101112,
+        "archive_reason": null,
+        "archived_at": null,
+        "archived_by": null
+    }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    archived_path.write_text("{}", encoding="utf-8")
+
+    loaded_active, _ = storage.load_tables()
+
+    assert loaded_active["table-1"].get("gm_id") == 123
+
+
+def test_load_tables_falls_back_to_creator_when_gm_unset(tmp_path: Path, monkeypatch) -> None:
+    active_path = tmp_path / "active.json"
+    archived_path = tmp_path / "archived.json"
+
+    monkeypatch.setattr(storage, "ACTIVE_DATA_FILE", str(active_path))
+    monkeypatch.setattr(storage, "ARCHIVED_DATA_FILE", str(archived_path))
+
+    active_path.write_text(
+        """
+{
+    "table-1": {
+        "system": "Test System",
+        "infos": "Test",
+        "schedule": "Soon",
+        "created_at": "2025-01-01T00:00:00Z",
+        "max_players": 4,
+        "players": [],
+        "waitlist": [],
+        "creator_id": 123,
+        "gm_id": 0,
+        "message_id": 456,
+        "channel_id": 789,
+        "guild_id": 101112,
+        "archive_reason": null,
+        "archived_at": null,
+        "archived_by": null
+    }
+}
+""".strip(),
+        encoding="utf-8",
+    )
+    archived_path.write_text("{}", encoding="utf-8")
+
+    loaded_active, _ = storage.load_tables()
+
+    assert loaded_active["table-1"].get("gm_id") == 123
