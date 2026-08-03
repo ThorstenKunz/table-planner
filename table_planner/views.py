@@ -8,7 +8,7 @@ from typing import Any, Dict, List, Optional
 
 import discord
 
-from .discord_utils import safe_followup_send, safe_response_send
+from .discord_utils import safe_followup_send, safe_response_defer, safe_response_send
 from .storage import load_tables, save_tables
 from .table_access import can_manage_table, is_table_owner
 from .types import ArchiveReason, PlayerEntry, TableData
@@ -200,6 +200,9 @@ class SignupView(discord.ui.View):
     async def join_callback(self, interaction: discord.Interaction) -> None:
         user = interaction.user
         logger.info("User %s (%s) trying to join table %s.", user, user.id, self.table_id)
+        if not await safe_response_defer(interaction):
+            return
+
         active_tables, archived_tables = load_tables()
         table_data = active_tables.get(self.table_id)
 
@@ -267,6 +270,9 @@ class SignupView(discord.ui.View):
     async def leave_callback(self, interaction: discord.Interaction) -> None:
         user = interaction.user
         logger.info("User %s (%s) trying to leave table %s.", user, user.id, self.table_id)
+        if not await safe_response_defer(interaction):
+            return
+
         active_tables, archived_tables = load_tables()
         table_data = active_tables.get(self.table_id)
 
