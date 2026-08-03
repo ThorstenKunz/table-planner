@@ -4,12 +4,9 @@ import os
 from dotenv import load_dotenv
 
 from table_planner import TablePlannerBot, setup_commands
+from table_planner.logging_config import configure_logging
 
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
-    datefmt="%Y-%m-%d %H:%M:%S",
-)
+configure_logging()
 
 load_dotenv()
 
