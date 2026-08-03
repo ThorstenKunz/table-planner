@@ -46,28 +46,6 @@ def check_guild_rate_limit(guild_id: int, now: datetime) -> tuple[bool, int]:
     return True, 0
 
 
-async def resolve_resolvable_ids(guild: discord.Guild | None, table_data: TableData) -> set[int]:
-    if guild is None:
-        return set()
-    user_ids = {
-        entry["id"]
-        for bucket in (table_data.get("players", []), table_data.get("waitlist", []))
-        for entry in bucket
-    }
-    resolvable: set[int] = set()
-    for user_id in user_ids:
-        member = guild.get_member(user_id)
-        if member is not None:
-            resolvable.add(user_id)
-            continue
-        try:
-            await guild.fetch_member(user_id)
-        except (discord.HTTPException, discord.Forbidden, discord.NotFound):
-            continue
-        resolvable.add(user_id)
-    return resolvable
-
-
 async def filter_tables_for_dm(
     interaction: discord.Interaction,
     active_tables: Dict[str, TableData],

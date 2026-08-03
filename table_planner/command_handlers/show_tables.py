@@ -2,16 +2,18 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import datetime, timezone
 
 import discord
 
 from ..storage import load_active_tables
+from ..member_resolution import apply_display_name_updates, cached_resolvable_ids, refresh_table_members
 from ..ui import create_table_embed
 from ..views import SignupView
 from ..discord_utils import safe_followup_send, safe_response_send
-from .utils import check_guild_rate_limit, check_user_rate_limit, filter_tables_for_dm, resolve_resolvable_ids
+from .utils import check_guild_rate_limit, check_user_rate_limit, filter_tables_for_dm
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +88,20 @@ def register_show_tables(tree: discord.app_commands.CommandTree) -> None:
         )
 
         for table_id, table_data in channel_tables.items():
-            resolvable_ids = await resolve_resolvable_ids(interaction.guild, table_data)
+            resolvable_ids = cached_resolvable_ids(interaction.guild, table_data)
+            if interaction.guild is not None:
+                try:
+                    resolvable_ids, updates = await asyncio.wait_for(
+                        refresh_table_members(interaction.guild, table_data),
+                        timeout=10,
+                    )
+                    refreshed_table = apply_display_name_updates(table_id, updates) if updates else None
+                    if refreshed_table is not None:
+                        table_data = refreshed_table
+                except asyncio.TimeoutError:
+                    logger.warning("Member refresh timed out while showing table %s.", table_id)
+                except OSError as exc:
+                    logger.error("Could not persist refreshed names for table %s: %s", table_id, exc)
             embed = create_table_embed(table_data, table_id, resolvable_ids=resolvable_ids)
             view = SignupView(table_id, table_data["max_players"])
             await safe_followup_send(

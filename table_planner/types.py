@@ -15,6 +15,7 @@ class PlayerEntry(TypedDict):
     id: int
     joined_at: str
     display_name: NotRequired[str]
+    display_name_updated_at: NotRequired[str]
 
 
 class TableData(TypedDict):

@@ -2,19 +2,32 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 import discord
 
 from .discord_utils import safe_followup_send, safe_response_defer, safe_response_send
-from .storage import load_tables, save_tables
+from .member_resolution import cached_resolvable_ids
+from .storage import archive_tables, load_tables, mutate_tables
 from .table_access import can_manage_table, is_table_owner
-from .types import ArchiveReason, PlayerEntry, TableData
+from .types import ArchiveReason, PlayerEntry, TableData, TablesDB
 from .ui import create_table_embed
 
 logger = logging.getLogger(__name__)
+_TABLE_UPDATE_LOCKS: dict[str, asyncio.Lock] = {}
+
+
+def table_update_lock(table_id: str) -> asyncio.Lock:
+    """Return the shared lock that orders Discord message updates for a table."""
+    lock = _TABLE_UPDATE_LOCKS.get(table_id)
+    if lock is None:
+        lock = asyncio.Lock()
+        _TABLE_UPDATE_LOCKS[table_id] = lock
+    return lock
 
 
 def _truncate_label(value: str, max_length: int = 100) -> str:
@@ -54,9 +67,15 @@ class SignupView(discord.ui.View):
 
     async def update_message(self, interaction: discord.Interaction, data: TableData) -> None:
         """Rebuilds the embed after signup or leave."""
+        async with table_update_lock(self.table_id):
+            latest_data = load_tables()[0].get(self.table_id)
+            if latest_data is None:
+                return
+            await self._update_message_locked(interaction, latest_data)
+
+    async def _update_message_locked(self, interaction: discord.Interaction, data: TableData) -> None:
         if interaction.message:
-            await self._populate_display_names(interaction, data)
-            resolvable_ids = await self._get_resolvable_ids(interaction, data)
+            resolvable_ids = cached_resolvable_ids(interaction.guild, data)
             new_embed = create_table_embed(data, self.table_id, resolvable_ids=resolvable_ids)
 
             players = data["players"]
@@ -117,8 +136,7 @@ class SignupView(discord.ui.View):
         except (discord.HTTPException, discord.Forbidden, discord.NotFound):
             return
 
-        await self._populate_display_names(interaction, data)
-        resolvable_ids = await self._get_resolvable_ids(interaction, data)
+        resolvable_ids = cached_resolvable_ids(interaction.guild, data)
         new_embed = create_table_embed(data, self.table_id, resolvable_ids=resolvable_ids)
         try:
             await message.edit(embed=new_embed, view=self)
@@ -142,97 +160,55 @@ class SignupView(discord.ui.View):
                 exc,
             )
 
-    async def _resolve_display_name(self, interaction: discord.Interaction, user_id: int) -> Optional[str]:
-        if interaction.guild is not None:
-            member = interaction.guild.get_member(user_id)
-            if member is not None:
-                return member.display_name
-            try:
-                member = await interaction.guild.fetch_member(user_id)
-                return member.display_name
-            except (discord.HTTPException, discord.Forbidden, discord.NotFound):
-                pass
-
-        user_obj = interaction.client.get_user(user_id)
-        if user_obj is None:
-            try:
-                user_obj = await interaction.client.fetch_user(user_id)
-            except (discord.HTTPException, discord.Forbidden, discord.NotFound):
-                return None
-        return getattr(user_obj, "display_name", None) or user_obj.name
-
-    async def _populate_display_names(self, interaction: discord.Interaction, data: TableData) -> bool:
-        updated = False
-        for bucket in (data.get("players", []), data.get("waitlist", [])):
-            for entry in bucket:
-                if entry.get("display_name"):
-                    continue
-                display_name = await self._resolve_display_name(interaction, entry["id"])
-                if display_name:
-                    entry["display_name"] = display_name
-                    updated = True
-        return updated
-
-    async def _get_resolvable_ids(self, interaction: discord.Interaction, data: TableData) -> set[int]:
-        guild = interaction.guild
-        if guild is None:
-            return set()
-
-        user_ids = {
-            entry["id"]
-            for bucket in (data.get("players", []), data.get("waitlist", []))
-            for entry in bucket
-        }
-        resolvable: set[int] = set()
-        for user_id in user_ids:
-            member = guild.get_member(user_id)
-            if member is not None:
-                resolvable.add(user_id)
-                continue
-            try:
-                await guild.fetch_member(user_id)
-            except (discord.HTTPException, discord.Forbidden, discord.NotFound):
-                continue
-            resolvable.add(user_id)
-
-        return resolvable
-
     async def join_callback(self, interaction: discord.Interaction) -> None:
         user = interaction.user
         logger.info("User %s (%s) trying to join table %s.", user, user.id, self.table_id)
         if not await safe_response_defer(interaction):
             return
 
-        active_tables, archived_tables = load_tables()
-        table_data = active_tables.get(self.table_id)
+        joined_at = datetime.now(timezone.utc).isoformat()
+        player_entry: PlayerEntry = {
+            "id": user.id,
+            "joined_at": joined_at,
+            "display_name": getattr(user, "display_name", user.name),
+            "display_name_updated_at": joined_at,
+        }
+
+        def join(active_tables: TablesDB, _archived_tables: TablesDB) -> tuple[str, TableData | None]:
+            table_data = active_tables.get(self.table_id)
+            if table_data is None:
+                return "missing", None
+            players = table_data["players"]
+            waitlist = table_data.setdefault("waitlist", [])
+            if any(entry["id"] == user.id for entry in players):
+                return "already_joined", table_data
+            if any(entry["id"] == user.id for entry in waitlist):
+                return "already_waiting", table_data
+            if len(players) >= table_data["max_players"]:
+                waitlist.append(player_entry)
+                return "waitlisted", table_data
+            players.append(player_entry)
+            return "joined", table_data
+
+        status, table_data = mutate_tables(join)
 
         if not table_data:
             logger.warning("User %s (%s) tried to join non-existent table %s.", user, user.id, self.table_id)
             await safe_response_send(interaction, "This table no longer exists.", ephemeral=True)
             return
 
-        players = table_data["players"]
-        waitlist = table_data.setdefault("waitlist", [])
-
-        if any(entry["id"] == user.id for entry in players):
+        if status == "already_joined":
             logger.info("User %s (%s) already signed up for table %s.", user, user.id, self.table_id)
             await safe_response_send(interaction, "You are already signed up!", ephemeral=True)
             return
 
-        if any(entry["id"] == user.id for entry in waitlist):
+        if status == "already_waiting":
             logger.info("User %s (%s) already on waitlist for table %s.", user, user.id, self.table_id)
             await safe_response_send(interaction, "You are already on the waitlist!", ephemeral=True)
             return
 
-        if len(players) >= table_data["max_players"]:
+        if status == "waitlisted":
             logger.info("User %s (%s) could not join table %s: full.", user, user.id, self.table_id)
-            waitlist.append({
-                "id": user.id,
-                "joined_at": datetime.now(timezone.utc).isoformat(),
-                "display_name": getattr(user, "display_name", user.name),
-            })
-            await self._populate_display_names(interaction, table_data)
-            save_tables(active_tables, archived_tables)
             await safe_response_send(
                 interaction,
                 "The group is full, but you have been added to the waitlist.",
@@ -249,13 +225,6 @@ class SignupView(discord.ui.View):
                 logger.error("Failed to DM user %s about waitlist join: %s", user.id, exc)
             return
 
-        players.append({
-            "id": user.id,
-            "joined_at": datetime.now(timezone.utc).isoformat(),
-            "display_name": getattr(user, "display_name", user.name),
-        })
-        await self._populate_display_names(interaction, table_data)
-        save_tables(active_tables, archived_tables)
         logger.info("User %s (%s) joined table %s.", user, user.id, self.table_id)
         await self.update_message(interaction, table_data)
         try:
@@ -273,25 +242,34 @@ class SignupView(discord.ui.View):
         if not await safe_response_defer(interaction):
             return
 
-        active_tables, archived_tables = load_tables()
-        table_data = active_tables.get(self.table_id)
+        def leave(
+            active_tables: TablesDB,
+            _archived_tables: TablesDB,
+        ) -> tuple[str, TableData | None, PlayerEntry | None]:
+            table_data = active_tables.get(self.table_id)
+            if table_data is None:
+                return "missing", None, None
+            players = table_data["players"]
+            waitlist = table_data.setdefault("waitlist", [])
+            if any(entry["id"] == user.id for entry in players):
+                table_data["players"] = [entry for entry in players if entry["id"] != user.id]
+                promoted = waitlist.pop(0) if waitlist else None
+                if promoted is not None:
+                    table_data["players"].append(promoted)
+                return "left", table_data, promoted
+            if any(entry["id"] == user.id for entry in waitlist):
+                table_data["waitlist"] = [entry for entry in waitlist if entry["id"] != user.id]
+                return "left_waitlist", table_data, None
+            return "not_registered", table_data, None
+
+        status, table_data, promoted = mutate_tables(leave)
 
         if not table_data:
             logger.warning("User %s (%s) not signed up for table %s.", user, user.id, self.table_id)
             await safe_response_send(interaction, "You weren't signed up in the first place.", ephemeral=True)
             return
 
-        players = table_data["players"]
-        waitlist = table_data.setdefault("waitlist", [])
-
-        if any(entry["id"] == user.id for entry in players):
-            table_data["players"] = [entry for entry in players if entry["id"] != user.id]
-            promoted: Optional[PlayerEntry] = None
-            if waitlist:
-                promoted = waitlist.pop(0)
-                table_data["players"].append(promoted)
-            await self._populate_display_names(interaction, table_data)
-            save_tables(active_tables, archived_tables)
+        if status == "left":
             logger.info("User %s (%s) left table %s.", user, user.id, self.table_id)
             await self.update_message(interaction, table_data)
             if promoted:
@@ -335,10 +313,7 @@ class SignupView(discord.ui.View):
                 logger.error("Failed to DM user %s about leaving table: %s", user.id, exc)
             return
 
-        if any(entry["id"] == user.id for entry in waitlist):
-            table_data["waitlist"] = [entry for entry in waitlist if entry["id"] != user.id]
-            await self._populate_display_names(interaction, table_data)
-            save_tables(active_tables, archived_tables)
+        if status == "left_waitlist":
             logger.info("User %s (%s) left waitlist for table %s.", user, user.id, self.table_id)
             await safe_response_send(interaction, "You have been removed from the waitlist.", ephemeral=True)
             await self.update_message(interaction, table_data)
@@ -354,6 +329,30 @@ class SignupView(discord.ui.View):
 
         logger.warning("User %s (%s) not signed up or waiting for table %s.", user, user.id, self.table_id)
         await safe_response_send(interaction, "You weren't signed up in the first place.", ephemeral=True)
+
+    async def on_error(
+        self,
+        interaction: discord.Interaction,
+        error: Exception,
+        item: discord.ui.Item[Any],
+    ) -> None:
+        error_id = uuid.uuid4().hex[:12]
+        logger.error(
+            "Unhandled signup interaction error %s for table=%s user=%s channel=%s message=%s item=%s: %s",
+            error_id,
+            self.table_id,
+            getattr(interaction.user, "id", "unknown"),
+            getattr(interaction.channel, "id", "unknown"),
+            getattr(interaction.message, "id", "unknown"),
+            getattr(item, "custom_id", "unknown"),
+            error,
+            exc_info=(type(error), error, error.__traceback__),
+        )
+        await safe_response_send(
+            interaction,
+            f"An unexpected error occurred (reference: {error_id}). Please try again later.",
+            ephemeral=True,
+        )
 
 
 class ArchiveView(discord.ui.View):
@@ -424,11 +423,9 @@ class ArchiveView(discord.ui.View):
             return
 
         reason = ArchiveReason.OWNER if is_table_owner(interaction.user.id, table_data) else ArchiveReason.MOD
-
-        table_data["archive_reason"] = reason
-        active_tables.pop(table_id, None)
-        archived_tables[table_id] = table_data
-        save_tables(active_tables, archived_tables)
+        if archive_tables((table_id,), reason) != 1:
+            await safe_followup_send(interaction, "This table can no longer be archived.", ephemeral=True)
+            return
         logger.info("Table %s archived by user %s.", table_id, self.user_id)
 
         try:

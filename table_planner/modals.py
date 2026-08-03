@@ -10,12 +10,36 @@ import discord
 
 from .table_access import can_manage_table, get_gm_id, get_table_channel, resolve_table_member
 from .discord_utils import safe_followup_send
-from .storage import load_tables, save_tables
-from .types import PlayerEntry, TableData
+from .storage import load_tables, mutate_tables
+from .types import PlayerEntry, TableData, TablesDB
 from .ui import create_table_embed
-from .views import SignupView
+from .views import SignupView, table_update_lock
 
 logger = logging.getLogger(__name__)
+
+
+async def _cleanup_orphaned_table_message(message: discord.Message, table_id: str) -> None:
+    """Best-effort removal of a message whose table could not be persisted."""
+    try:
+        await message.edit(view=None)
+    except (discord.Forbidden, discord.HTTPException, discord.NotFound) as cleanup_exc:
+        logger.critical(
+            "Could not disable orphaned table message %s for table %s: %s",
+            message.id,
+            table_id,
+            cleanup_exc,
+        )
+    try:
+        await message.delete()
+    except discord.NotFound:
+        pass
+    except (discord.Forbidden, discord.HTTPException) as cleanup_exc:
+        logger.critical(
+            "Could not delete orphaned table message %s for table %s: %s",
+            message.id,
+            table_id,
+            cleanup_exc,
+        )
 
 
 class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
@@ -99,8 +123,6 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
         logger.info("Modal for /create-table submitted by %s (%s).", user, user.id)
 
         table_id = str(uuid.uuid4())
-        active_tables, archived_tables = load_tables()
-
         new_table: TableData = {
             "system": system_value,
             "infos": infos_value,
@@ -165,8 +187,28 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
         new_table["message_id"] = message.id
         new_table["channel_id"] = message.channel.id
 
-        active_tables[table_id] = new_table
-        save_tables(active_tables, archived_tables)
+        def insert(active_tables: TablesDB, _archived_tables: TablesDB) -> None:
+            if table_id in active_tables:
+                raise ValueError(f"Generated duplicate table ID {table_id}.")
+            active_tables[table_id] = new_table
+
+        try:
+            mutate_tables(insert)
+        except OSError as exc:
+            logger.critical(
+                "Could not persist newly posted table %s; removing message %s: %s",
+                table_id,
+                message.id,
+                exc,
+                exc_info=True,
+            )
+            await _cleanup_orphaned_table_message(message, table_id)
+            await safe_followup_send(
+                interaction,
+                "The table could not be saved. Its Discord message was removed or disabled; please try again.",
+                ephemeral=True,
+            )
+            return
         logger.info(
             "New table %s created by %s (%s) with GM %s.",
             table_id,
@@ -308,27 +350,35 @@ class EditTableModal(discord.ui.Modal):
             )
             return
 
-        table_data["system"] = system_value
-        table_data["schedule"] = schedule_value
-        table_data["infos"] = infos_value
-        table_data["max_players"] = max_players_int
-        table_data["gm_id"] = new_gm.id
+        def update(
+            active_tables: TablesDB,
+            _archived_tables: TablesDB,
+        ) -> tuple[TableData | None, list[PlayerEntry]]:
+            latest_table = active_tables.get(self.table_id)
+            if latest_table is None:
+                return None, []
+            latest_table["system"] = system_value
+            latest_table["schedule"] = schedule_value
+            latest_table["infos"] = infos_value
+            latest_table["max_players"] = max_players_int
+            latest_table["gm_id"] = new_gm.id
 
-        moved_to_waitlist: list[PlayerEntry] = []
-        players = list(table_data["players"])
-        waitlist = list(table_data.get("waitlist", []))
-        if len(players) > max_players_int:
+            moved: list[PlayerEntry] = []
+            players = list(latest_table["players"])
+            waitlist = list(latest_table.get("waitlist", []))
             while len(players) > max_players_int:
-                entry_to_move = players.pop()
-                moved_to_waitlist.append(entry_to_move)
+                moved.append(players.pop())
+            if moved:
+                latest_table["players"] = players
+                combined_waitlist = waitlist + moved
+                combined_waitlist.sort(key=lambda item: item["joined_at"])
+                latest_table["waitlist"] = combined_waitlist
+            return latest_table, moved
 
-            table_data["players"] = players
-            combined_waitlist = waitlist + moved_to_waitlist
-            combined_waitlist.sort(key=lambda item: item["joined_at"])
-            table_data["waitlist"] = combined_waitlist
-
-        active_tables[self.table_id] = table_data
-        save_tables(active_tables, archived_tables)
+        table_data, moved_to_waitlist = mutate_tables(update)
+        if table_data is None:
+            await safe_followup_send(interaction, "This table no longer exists or was archived.", ephemeral=True)
+            return
 
         embed = create_table_embed(table_data, self.table_id)
         view = SignupView(self.table_id, table_data["max_players"])
@@ -337,8 +387,9 @@ class EditTableModal(discord.ui.Modal):
         message_updated = False
         if isinstance(channel, discord.TextChannel):
             try:
-                message = await channel.fetch_message(table_data["message_id"])
-                await message.edit(embed=embed, view=view)
+                async with table_update_lock(self.table_id):
+                    message = await channel.fetch_message(table_data["message_id"])
+                    await message.edit(embed=embed, view=view)
                 message_updated = True
             except discord.Forbidden:
                 logger.warning(

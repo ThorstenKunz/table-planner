@@ -1,3 +1,4 @@
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from table_planner import storage
@@ -135,3 +136,43 @@ def test_load_tables_falls_back_to_creator_when_gm_unset(tmp_path: Path, monkeyp
     loaded_active, _ = storage.load_tables()
 
     assert loaded_active["table-1"].get("gm_id") == 123
+
+
+def test_mutate_tables_preserves_concurrent_updates(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(storage, "ACTIVE_DATA_FILE", str(tmp_path / "active.json"))
+    monkeypatch.setattr(storage, "ARCHIVED_DATA_FILE", str(tmp_path / "archived.json"))
+    storage.save_tables({"table-1": _sample_table()}, {})
+
+    def append_player(user_id: int) -> None:
+        def mutation(active, _archived) -> None:
+            active["table-1"]["players"].append(
+                {"id": user_id, "joined_at": f"2026-01-01T00:00:{user_id:02d}+00:00"}
+            )
+
+        storage.mutate_tables(mutation)
+
+    with ThreadPoolExecutor(max_workers=8) as executor:
+        list(executor.map(append_player, range(20)))
+
+    active, _ = storage.load_tables()
+    assert {entry["id"] for entry in active["table-1"]["players"]} == set(range(20))
+
+
+def test_mutate_tables_does_not_write_when_mutation_fails(tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setattr(storage, "ACTIVE_DATA_FILE", str(tmp_path / "active.json"))
+    monkeypatch.setattr(storage, "ARCHIVED_DATA_FILE", str(tmp_path / "archived.json"))
+    storage.save_tables({"table-1": _sample_table()}, {})
+
+    def failing_mutation(active, _archived) -> None:
+        active["table-1"]["system"] = "Should not persist"
+        raise RuntimeError("injected failure")
+
+    try:
+        storage.mutate_tables(failing_mutation)
+    except RuntimeError:
+        pass
+    else:
+        raise AssertionError("Expected injected mutation failure")
+
+    active, _ = storage.load_tables()
+    assert active["table-1"]["system"] == "Test System"
