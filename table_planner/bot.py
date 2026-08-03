@@ -26,32 +26,56 @@ class TablePlannerBot(discord.Client):
         logger.info("Loading saved tables...")
         active_tables = load_active_tables()
         tables_to_archive: list[str] = []
-        count = 0
+        registered_views = 0
+        synced_messages = 0
+        refreshed_messages = 0
+        missing_messages = 0
+        temporarily_unavailable = 0
+        invalid_records = 0
+        refresh_failures = 0
+        archived_count = 0
 
         for table_id, info in active_tables.items():
             try:
                 guild_id = int(info["guild_id"])
                 channel_id = int(info["channel_id"])
             except (KeyError, TypeError, ValueError):
+                invalid_records += 1
+                logger.error("Invalid guild/channel metadata for active table %s.", table_id)
                 tables_to_archive.append(table_id)
                 continue
 
             if not guild_id or not channel_id:
+                invalid_records += 1
+                logger.error(
+                    "Active table %s has an empty guild or channel ID (guild=%s, channel=%s).",
+                    table_id,
+                    guild_id,
+                    channel_id,
+                )
                 tables_to_archive.append(table_id)
                 continue
 
             view = SignupView(table_id, info["max_players"])
             self.add_view(view)
-            count += 1
+            registered_views += 1
+            logger.info("Registered persistent controls for active table %s.", table_id)
 
             channel = self.get_channel(channel_id)
             if channel is None:
                 try:
                     channel = await self.fetch_channel(channel_id)
                 except discord.NotFound:
+                    invalid_records += 1
+                    logger.error(
+                        "Channel %s for active table %s no longer exists.",
+                        channel_id,
+                        table_id,
+                    )
                     tables_to_archive.append(table_id)
                     continue
                 except discord.Forbidden:
+                    temporarily_unavailable += 1
                     logger.warning(
                         "Cannot access channel %s for table %s during startup reconciliation.",
                         channel_id,
@@ -59,6 +83,7 @@ class TablePlannerBot(discord.Client):
                     )
                     continue
                 except discord.HTTPException as exc:
+                    temporarily_unavailable += 1
                     logger.warning(
                         "Temporary Discord error resolving channel %s for table %s: %s",
                         channel_id,
@@ -68,10 +93,23 @@ class TablePlannerBot(discord.Client):
                     continue
 
             if channel is None or not isinstance(channel, discord.TextChannel):
+                invalid_records += 1
+                logger.error(
+                    "Stored channel %s for active table %s is not a text channel.",
+                    channel_id,
+                    table_id,
+                )
                 tables_to_archive.append(table_id)
                 continue
 
             if channel.guild.id != guild_id:
+                invalid_records += 1
+                logger.error(
+                    "Guild mismatch for active table %s: stored=%s actual=%s.",
+                    table_id,
+                    guild_id,
+                    channel.guild.id,
+                )
                 tables_to_archive.append(table_id)
                 continue
 
@@ -83,7 +121,16 @@ class TablePlannerBot(discord.Client):
                     resolvable_ids=cached_resolvable_ids(channel.guild, info),
                 )
                 await message.edit(embed=embed, view=view)
+                synced_messages += 1
+                logger.info(
+                    "Synchronized original embed for table %s (guild=%s channel=%s message=%s).",
+                    table_id,
+                    guild_id,
+                    channel_id,
+                    info["message_id"],
+                )
             except discord.NotFound:
+                missing_messages += 1
                 logger.warning(
                     "Original message %s for table %s no longer exists; persistent controls remain registered.",
                     info.get("message_id"),
@@ -91,6 +138,7 @@ class TablePlannerBot(discord.Client):
                 )
                 continue
             except discord.Forbidden:
+                temporarily_unavailable += 1
                 logger.warning(
                     "Cannot reconcile original message %s for table %s due to missing permissions.",
                     info.get("message_id"),
@@ -98,6 +146,7 @@ class TablePlannerBot(discord.Client):
                 )
                 continue
             except discord.HTTPException as exc:
+                temporarily_unavailable += 1
                 logger.warning(
                     "Temporary Discord error reconciling original message %s for table %s: %s",
                     info.get("message_id"),
@@ -119,16 +168,27 @@ class TablePlannerBot(discord.Client):
                         resolvable_ids=cached_resolvable_ids(channel.guild, refreshed_table),
                     )
                     await message.edit(embed=refreshed_embed, view=view)
+                    refreshed_messages += 1
+                    logger.info(
+                        "Applied refreshed member names to original embed for table %s (message=%s, users=%s).",
+                        table_id,
+                        info["message_id"],
+                        len(updates),
+                    )
             except asyncio.TimeoutError:
+                refresh_failures += 1
                 logger.warning("Member refresh timed out for table %s during startup.", table_id)
             except OSError as exc:
+                refresh_failures += 1
                 logger.error("Could not persist refreshed member names for table %s: %s", table_id, exc)
             except (discord.Forbidden, discord.HTTPException, discord.NotFound) as exc:
+                refresh_failures += 1
                 logger.warning("Could not apply refreshed display for table %s: %s", table_id, exc)
 
         if tables_to_archive:
             try:
                 archived = archive_tables(tables_to_archive, ArchiveReason.NO_ACCESS)
+                archived_count = archived
                 logger.warning(
                     "Archived %s table(s) referencing invalid or missing guilds/channels: %s",
                     archived,
@@ -137,7 +197,21 @@ class TablePlannerBot(discord.Client):
             except OSError as exc:
                 logger.critical("Could not archive invalid startup records: %s", exc, exc_info=True)
 
-        logger.info("%s active tables restored. Syncing commands...", count)
+        logger.info(
+            "Startup reconciliation completed: active=%s, views_registered=%s, embeds_synced=%s, "
+            "embeds_refreshed=%s, messages_missing=%s, temporarily_unavailable=%s, "
+            "invalid_records=%s, refresh_failures=%s, archived=%s.",
+            len(active_tables),
+            registered_views,
+            synced_messages,
+            refreshed_messages,
+            missing_messages,
+            temporarily_unavailable,
+            invalid_records,
+            refresh_failures,
+            archived_count,
+        )
+        logger.info("Syncing application commands after startup reconciliation.")
         await self.tree.sync()
         logger.info("Command tree synced.")
 

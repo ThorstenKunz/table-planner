@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from unittest.mock import AsyncMock, Mock
 
 from table_planner import bot as bot_module
@@ -78,7 +79,7 @@ class _Bot:
         self.views.append(view)
 
 
-def test_setup_hook_resyncs_original_table_message(monkeypatch) -> None:
+def test_setup_hook_resyncs_original_table_message(monkeypatch, caplog) -> None:
     message = _Message()
     channel = _TextChannel(message)
     test_bot = _Bot(channel)
@@ -86,7 +87,8 @@ def test_setup_hook_resyncs_original_table_message(monkeypatch) -> None:
     monkeypatch.setattr(bot_module, "load_active_tables", lambda: {"table-1": _table()})
     monkeypatch.setattr(bot_module, "refresh_table_members", AsyncMock(return_value=(set(), {})))
 
-    asyncio.run(test_bot.setup_hook())
+    with caplog.at_level(logging.INFO):
+        asyncio.run(test_bot.setup_hook())
 
     assert len(test_bot.views) == 1
     assert len(message.edits) == 1
@@ -95,6 +97,8 @@ def test_setup_hook_resyncs_original_table_message(monkeypatch) -> None:
     assert embed.fields[4].name == "Waitlist (1)"
     assert message.edits[0]["view"] is test_bot.views[0]
     test_bot.tree.sync.assert_awaited_once_with()
+    assert "Synchronized original embed for table table-1" in caplog.text
+    assert "active=1, views_registered=1, embeds_synced=1" in caplog.text
 
 
 def test_setup_hook_does_not_archive_on_temporary_discord_error(monkeypatch) -> None:
