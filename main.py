@@ -32,4 +32,6 @@ async def on_ready() -> None:
 
 setup_commands(bot)
 
-bot.run(TOKEN)
+# Logging is configured above; prevent discord.py from installing a second
+# handler that would emit every Discord log record twice.
+bot.run(TOKEN, log_handler=None)
