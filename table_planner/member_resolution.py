@@ -59,6 +59,8 @@ async def refresh_table_members(
     ]
     resolvable = cached_resolvable_ids(guild, table_data)
     stale_ids = {entry["id"] for entry in entries if _display_name_is_stale(entry, now)}
+    all_ids = {entry["id"] for entry in entries}
+    ids_to_resolve = stale_ids | (all_ids - resolvable)
     updates: dict[int, tuple[str, str]] = {}
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MEMBER_FETCHES)
 
@@ -71,9 +73,10 @@ async def refresh_table_members(
             except (discord.HTTPException, discord.Forbidden, discord.NotFound):
                 return
         resolvable.add(user_id)
-        updates[user_id] = (member.display_name, refreshed_at)
+        if user_id in stale_ids:
+            updates[user_id] = (member.display_name, refreshed_at)
 
-    await asyncio.gather(*(resolve(user_id) for user_id in stale_ids))
+    await asyncio.gather(*(resolve(user_id) for user_id in ids_to_resolve))
     return resolvable, updates
 
 

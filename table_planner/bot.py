@@ -115,10 +115,12 @@ class TablePlannerBot(discord.Client):
 
             try:
                 message = await channel.fetch_message(info["message_id"])
+                cached_ids = cached_resolvable_ids(channel.guild, info)
+                view.update_resolvable_ids(cached_ids)
                 embed = create_table_embed(
                     info,
                     table_id,
-                    resolvable_ids=cached_resolvable_ids(channel.guild, info),
+                    resolvable_ids=cached_ids,
                 )
                 await message.edit(embed=embed, view=view)
                 synced_messages += 1
@@ -156,23 +158,27 @@ class TablePlannerBot(discord.Client):
                 continue
 
             try:
-                _, updates = await asyncio.wait_for(
+                resolvable_ids, updates = await asyncio.wait_for(
                     refresh_table_members(channel.guild, info),
                     timeout=10,
                 )
+                view.update_resolvable_ids(resolvable_ids)
                 refreshed_table = apply_display_name_updates(table_id, updates) if updates else None
-                if refreshed_table is not None:
+                if refreshed_table is not None or resolvable_ids != cached_ids:
+                    display_table = refreshed_table or info
                     refreshed_embed = create_table_embed(
-                        refreshed_table,
+                        display_table,
                         table_id,
-                        resolvable_ids=cached_resolvable_ids(channel.guild, refreshed_table),
+                        resolvable_ids=resolvable_ids,
                     )
                     await message.edit(embed=refreshed_embed, view=view)
                     refreshed_messages += 1
                     logger.info(
-                        "Applied refreshed member names to original embed for table %s (message=%s, users=%s).",
+                        "Applied refreshed member display to original embed for table %s "
+                        "(message=%s, resolved=%s, names_updated=%s).",
                         table_id,
                         info["message_id"],
+                        len(resolvable_ids),
                         len(updates),
                     )
             except asyncio.TimeoutError:

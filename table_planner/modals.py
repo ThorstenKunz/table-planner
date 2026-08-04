@@ -10,6 +10,7 @@ import discord
 
 from .table_access import can_manage_table, get_gm_id, get_table_channel, resolve_table_member
 from .discord_utils import safe_followup_send
+from .member_resolution import cached_resolvable_ids
 from .storage import load_tables, mutate_tables
 from .types import PlayerEntry, TableData, TablesDB
 from .ui import create_table_embed
@@ -380,8 +381,14 @@ class EditTableModal(discord.ui.Modal):
             await safe_followup_send(interaction, "This table no longer exists or was archived.", ephemeral=True)
             return
 
-        embed = create_table_embed(table_data, self.table_id)
-        view = SignupView(self.table_id, table_data["max_players"], len(table_data["players"]))
+        resolvable_ids = cached_resolvable_ids(interaction.guild, table_data)
+        embed = create_table_embed(table_data, self.table_id, resolvable_ids=resolvable_ids)
+        view = SignupView(
+            self.table_id,
+            table_data["max_players"],
+            len(table_data["players"]),
+            resolvable_ids=resolvable_ids,
+        )
 
         channel = await get_table_channel(self.bot, table_data["channel_id"])
         message_updated = False

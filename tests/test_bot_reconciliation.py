@@ -86,17 +86,19 @@ def test_setup_hook_resyncs_original_table_message(monkeypatch, caplog) -> None:
     test_bot = _Bot(channel)
     monkeypatch.setattr(bot_module.discord, "TextChannel", _TextChannel)
     monkeypatch.setattr(bot_module, "load_active_tables", lambda: {"table-1": _table()})
-    monkeypatch.setattr(bot_module, "refresh_table_members", AsyncMock(return_value=(set(), {})))
+    monkeypatch.setattr(bot_module, "refresh_table_members", AsyncMock(return_value=({1, 2, 3}, {})))
 
     with caplog.at_level(logging.INFO):
         asyncio.run(test_bot.setup_hook())
 
     assert len(test_bot.views) == 1
-    assert len(message.edits) == 1
-    embed = message.edits[0]["embed"]
+    assert len(message.edits) == 2
+    embed = message.edits[-1]["embed"]
     assert embed.fields[3].name == "Players (2/2)"
+    assert embed.fields[3].value == "• <@1>\n• <@3>"
     assert embed.fields[4].name == "Waitlist (1)"
-    assert message.edits[0]["view"] is test_bot.views[0]
+    assert embed.fields[4].value == "• <@2>"
+    assert message.edits[-1]["view"] is test_bot.views[0]
     assert test_bot.views[0].join_btn.label == "Join Waitlist"
     assert test_bot.views[0].join_btn.style == bot_module.discord.ButtonStyle.grey
     test_bot.tree.sync.assert_awaited_once_with()

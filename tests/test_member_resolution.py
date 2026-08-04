@@ -57,7 +57,7 @@ def test_cached_resolvable_ids_never_fetches() -> None:
     guild.fetch_member.assert_not_called()
 
 
-def test_refresh_fetches_only_stale_uncached_members() -> None:
+def test_refresh_fetches_uncached_members_even_when_their_saved_name_is_fresh() -> None:
     guild = _Guild({1: _Member(1, "Cached")})
     table = _table([
         {"id": 1, "joined_at": "2026-01-01T00:00:00+00:00"},
@@ -72,11 +72,12 @@ def test_refresh_fetches_only_stale_uncached_members() -> None:
 
     resolvable, updates = asyncio.run(refresh_table_members(guild, table))
 
-    assert resolvable == {1, 3}
+    assert resolvable == {1, 2, 3}
     assert updates[1][0] == "Cached"
     assert updates[3][0] == "Fetched 3"
     assert 2 not in updates
-    guild.fetch_member.assert_awaited_once_with(3)
+    assert guild.fetch_member.await_count == 2
+    assert {call.args[0] for call in guild.fetch_member.await_args_list} == {2, 3}
 
 
 def test_refreshed_name_is_merged_into_latest_table(tmp_path, monkeypatch) -> None:

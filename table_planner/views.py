@@ -40,10 +40,17 @@ def _truncate_label(value: str, max_length: int = 100) -> str:
 
 
 class SignupView(discord.ui.View):
-    def __init__(self, table_id: str, max_players: int, player_count: int = 0) -> None:
+    def __init__(
+        self,
+        table_id: str,
+        max_players: int,
+        player_count: int = 0,
+        resolvable_ids: set[int] | None = None,
+    ) -> None:
         super().__init__(timeout=None)
         self.table_id: str = table_id
         self.max_players: int = max_players
+        self.resolvable_ids: set[int] = set(resolvable_ids or ())
 
         join_button = discord.ui.Button(
             label="Sign Up",
@@ -74,6 +81,14 @@ class SignupView(discord.ui.View):
         self.join_btn.label = "Join Waitlist" if is_full else "Sign Up"
         self.join_btn.style = discord.ButtonStyle.grey if is_full else discord.ButtonStyle.green
 
+    def update_resolvable_ids(self, resolvable_ids: set[int]) -> None:
+        """Remember members confirmed by cache or Discord API for later edits."""
+        self.resolvable_ids = set(resolvable_ids)
+
+    def _resolvable_ids_for(self, interaction: discord.Interaction, data: TableData) -> set[int]:
+        self.resolvable_ids.update(cached_resolvable_ids(interaction.guild, data))
+        return self.resolvable_ids
+
     async def update_message(self, interaction: discord.Interaction, data: TableData) -> None:
         """Rebuilds the embed after signup or leave."""
         async with table_update_lock(self.table_id):
@@ -84,7 +99,7 @@ class SignupView(discord.ui.View):
 
     async def _update_message_locked(self, interaction: discord.Interaction, data: TableData) -> None:
         if interaction.message:
-            resolvable_ids = cached_resolvable_ids(interaction.guild, data)
+            resolvable_ids = self._resolvable_ids_for(interaction, data)
             new_embed = create_table_embed(data, self.table_id, resolvable_ids=resolvable_ids)
 
             self.max_players = data["max_players"]
@@ -142,7 +157,7 @@ class SignupView(discord.ui.View):
         except (discord.HTTPException, discord.Forbidden, discord.NotFound):
             return
 
-        resolvable_ids = cached_resolvable_ids(interaction.guild, data)
+        resolvable_ids = self._resolvable_ids_for(interaction, data)
         new_embed = create_table_embed(data, self.table_id, resolvable_ids=resolvable_ids)
         try:
             await message.edit(embed=new_embed, view=self)

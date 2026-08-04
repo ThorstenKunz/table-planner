@@ -7,6 +7,24 @@ from .table_access import get_gm_id
 from .types import TableData
 
 
+def _format_member_entry(entry: object, resolvable_ids: set[int] | None) -> str:
+    """Prefer a confirmed mention, then a stored name, then a plain user ID."""
+    if not isinstance(entry, dict):
+        return "Unknown user"
+
+    user_id = entry.get("id")
+    if isinstance(user_id, int) and user_id > 0 and resolvable_ids is not None and user_id in resolvable_ids:
+        return f"<@{user_id}>"
+
+    display_name = entry.get("display_name")
+    if isinstance(display_name, str) and display_name.strip():
+        return escape_mentions(escape_markdown(display_name.strip()))
+
+    if isinstance(user_id, int) and user_id > 0:
+        return str(user_id)
+    return "Unknown user"
+
+
 def create_table_embed(table_data: TableData, table_id: str, resolvable_ids: set[int] | None = None) -> discord.Embed:
     """Creates a standardized embed for a table."""
     safe_system = escape_mentions(escape_markdown(table_data["system"]))
@@ -19,32 +37,12 @@ def create_table_embed(table_data: TableData, table_id: str, resolvable_ids: set
     embed.add_field(name="📜 Infos", value=safe_infos, inline=False)
 
     players = table_data["players"]
-    player_mentions = []
-    for entry in players:
-        display_name = entry.get("display_name")
-        user_id = entry.get("id")
-        if isinstance(user_id, int) and user_id > 0 and (resolvable_ids is None or user_id in resolvable_ids):
-            player_mentions.append(f"• <@{user_id}>")
-        elif isinstance(display_name, str) and display_name.strip():
-            safe_name = escape_mentions(escape_markdown(display_name.strip()))
-            player_mentions.append(f"• {safe_name}")
-        else:
-            player_mentions.append("• Unknown user")
+    player_mentions = [f"• {_format_member_entry(entry, resolvable_ids)}" for entry in players]
     player_list = "\n".join(player_mentions) if player_mentions else "No players yet."
     embed.add_field(name=f"Players ({len(players)}/{table_data['max_players']})", value=player_list, inline=False)
 
     waitlist = table_data.get("waitlist", [])
-    waitlist_mentions = []
-    for entry in waitlist:
-        display_name = entry.get("display_name")
-        user_id = entry.get("id")
-        if isinstance(user_id, int) and user_id > 0 and (resolvable_ids is None or user_id in resolvable_ids):
-            waitlist_mentions.append(f"• <@{user_id}>")
-        elif isinstance(display_name, str) and display_name.strip():
-            safe_name = escape_mentions(escape_markdown(display_name.strip()))
-            waitlist_mentions.append(f"• {safe_name}")
-        else:
-            waitlist_mentions.append("• Unknown user")
+    waitlist_mentions = [f"• {_format_member_entry(entry, resolvable_ids)}" for entry in waitlist]
     waitlist_value = "\n".join(waitlist_mentions) if waitlist_mentions else "No one waiting."
     embed.add_field(name=f"Waitlist ({len(waitlist)})", value=waitlist_value, inline=False)
 
