@@ -38,6 +38,19 @@ def _truncate_label(value: str, max_length: int = 100) -> str:
     return trimmed[: max_length - 3] + "..."
 
 
+def _table_select_option(table_id: str, info: TableData) -> discord.SelectOption:
+    """Build a bounded ``System | Schedule | Infos`` table option."""
+    system = _truncate_label(info["system"], 30)
+    schedule = _truncate_label(info["schedule"], 40)
+    label_prefix = f"{system} | {schedule} | "
+    infos = _truncate_label(info["infos"], 100 - len(label_prefix))
+    return discord.SelectOption(
+        label=f"{label_prefix}{infos}",
+        description=f"Table ID: {table_id[-4:]}",
+        value=table_id,
+    )
+
+
 class SignupView(discord.ui.View):
     def __init__(
         self,
@@ -369,14 +382,7 @@ class ArchiveView(discord.ui.View):
         self.bot = bot
         self.user_id = user_id
 
-        options = [
-            discord.SelectOption(
-                label=_truncate_label(f"{info['infos']} ({table_id[-4:]})"),
-                description=f"System: {info['system']}",
-                value=table_id,
-            )
-            for table_id, info in tables.items()
-        ]
+        options = [_table_select_option(table_id, info) for table_id, info in tables.items()]
 
         if not options:
             options.append(discord.SelectOption(label="You have no active tables to archive.", value="no_tables"))
@@ -456,7 +462,7 @@ class ArchiveView(discord.ui.View):
 
         await safe_followup_send(
             interaction,
-            f"Table '{table_data['infos'][:50]}...' has been archived.",
+            f"Table '{table_data['system']} | {table_data['schedule']} | {table_data['infos'][:50]}' has been archived.",
             ephemeral=True,
         )
         await interaction.edit_original_response(content="The selected table has been archived.", view=None)
@@ -469,14 +475,7 @@ class EditTableView(discord.ui.View):
         self.user_id = user_id
         self.tables = tables
 
-        options = [
-            discord.SelectOption(
-                label=_truncate_label(f"{info['infos']} ({table_id[-4:]})"),
-                description=f"System: {info['system']}",
-                value=table_id,
-            )
-            for table_id, info in tables.items()
-        ]
+        options = [_table_select_option(table_id, info) for table_id, info in tables.items()]
 
         if not options:
             options.append(discord.SelectOption(label="You have no tables to edit.", value="no_tables"))
