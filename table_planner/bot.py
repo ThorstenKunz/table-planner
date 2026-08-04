@@ -56,7 +56,7 @@ class TablePlannerBot(discord.Client):
                 tables_to_archive.append(table_id)
                 continue
 
-            view = SignupView(table_id, info["max_players"])
+            view = SignupView(table_id, info["max_players"], len(info["players"]))
             self.add_view(view)
             registered_views += 1
             logger.info("Registered persistent controls for active table %s.", table_id)

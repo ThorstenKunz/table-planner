@@ -40,7 +40,7 @@ def _truncate_label(value: str, max_length: int = 100) -> str:
 
 
 class SignupView(discord.ui.View):
-    def __init__(self, table_id: str, max_players: int) -> None:
+    def __init__(self, table_id: str, max_players: int, player_count: int = 0) -> None:
         super().__init__(timeout=None)
         self.table_id: str = table_id
         self.max_players: int = max_players
@@ -65,6 +65,15 @@ class SignupView(discord.ui.View):
         self.add_item(leave_button)
         self.leave_btn = leave_button
 
+        self._update_join_button(player_count)
+
+    def _update_join_button(self, player_count: int) -> None:
+        """Keep the join control in sync with the table's current capacity."""
+        is_full = player_count >= self.max_players
+        self.join_btn.disabled = False
+        self.join_btn.label = "Join Waitlist" if is_full else "Sign Up"
+        self.join_btn.style = discord.ButtonStyle.grey if is_full else discord.ButtonStyle.green
+
     async def update_message(self, interaction: discord.Interaction, data: TableData) -> None:
         """Rebuilds the embed after signup or leave."""
         async with table_update_lock(self.table_id):
@@ -78,11 +87,8 @@ class SignupView(discord.ui.View):
             resolvable_ids = cached_resolvable_ids(interaction.guild, data)
             new_embed = create_table_embed(data, self.table_id, resolvable_ids=resolvable_ids)
 
-            players = data["players"]
-            is_full = len(players) >= self.max_players
-            self.join_btn.disabled = False
-            self.join_btn.label = "Join Waitlist" if is_full else "Sign Up"
-            self.join_btn.style = discord.ButtonStyle.grey if is_full else discord.ButtonStyle.green
+            self.max_players = data["max_players"]
+            self._update_join_button(len(data["players"]))
 
             try:
                 if not interaction.response.is_done():

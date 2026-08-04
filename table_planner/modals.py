@@ -381,7 +381,7 @@ class EditTableModal(discord.ui.Modal):
             return
 
         embed = create_table_embed(table_data, self.table_id)
-        view = SignupView(self.table_id, table_data["max_players"])
+        view = SignupView(self.table_id, table_data["max_players"], len(table_data["players"]))
 
         channel = await get_table_channel(self.bot, table_data["channel_id"])
         message_updated = False

@@ -103,7 +103,7 @@ def register_show_tables(tree: discord.app_commands.CommandTree) -> None:
                 except OSError as exc:
                     logger.error("Could not persist refreshed names for table %s: %s", table_id, exc)
             embed = create_table_embed(table_data, table_id, resolvable_ids=resolvable_ids)
-            view = SignupView(table_id, table_data["max_players"])
+            view = SignupView(table_id, table_data["max_players"], len(table_data["players"]))
             await safe_followup_send(
                 interaction,
                 "",

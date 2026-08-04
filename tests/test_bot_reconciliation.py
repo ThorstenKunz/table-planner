@@ -14,7 +14,8 @@ def _table() -> TableData:
         "created_at": None,
         "max_players": 2,
         "players": [
-            {"id": 1, "joined_at": "2026-01-01T00:00:00+00:00", "display_name": "Player"}
+            {"id": 1, "joined_at": "2026-01-01T00:00:00+00:00", "display_name": "Player"},
+            {"id": 3, "joined_at": "2026-01-01T00:00:00+00:00", "display_name": "Player 2"},
         ],
         "waitlist": [
             {"id": 2, "joined_at": "2026-01-01T00:00:01+00:00", "display_name": "Waiting"}
@@ -93,9 +94,11 @@ def test_setup_hook_resyncs_original_table_message(monkeypatch, caplog) -> None:
     assert len(test_bot.views) == 1
     assert len(message.edits) == 1
     embed = message.edits[0]["embed"]
-    assert embed.fields[3].name == "Players (1/2)"
+    assert embed.fields[3].name == "Players (2/2)"
     assert embed.fields[4].name == "Waitlist (1)"
     assert message.edits[0]["view"] is test_bot.views[0]
+    assert test_bot.views[0].join_btn.label == "Join Waitlist"
+    assert test_bot.views[0].join_btn.style == bot_module.discord.ButtonStyle.grey
     test_bot.tree.sync.assert_awaited_once_with()
     assert "Synchronized original embed for table table-1" in caplog.text
     assert "active=1, views_registered=1, embeds_synced=1" in caplog.text
