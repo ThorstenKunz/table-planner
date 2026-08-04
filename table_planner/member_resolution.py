@@ -8,22 +8,11 @@ from datetime import datetime, timedelta, timezone
 import discord
 
 from .storage import mutate_tables
+from .table_access import get_gm_id
 from .types import TableData, TablesDB
 
 DISPLAY_NAME_TTL = timedelta(hours=24)
 MAX_CONCURRENT_MEMBER_FETCHES = 4
-
-
-def cached_resolvable_ids(guild: discord.Guild | None, table_data: TableData) -> set[int]:
-    """Return IDs already present in discord.py's cache without network I/O."""
-    if guild is None:
-        return set()
-    return {
-        entry["id"]
-        for bucket in (table_data.get("players", []), table_data.get("waitlist", []))
-        for entry in bucket
-        if guild.get_member(entry["id"]) is not None
-    }
 
 
 def _display_name_is_stale(entry: object, now: datetime) -> bool:
@@ -57,10 +46,14 @@ async def refresh_table_members(
         for bucket in (table_data.get("players", []), table_data.get("waitlist", []))
         for entry in bucket
     ]
-    resolvable = cached_resolvable_ids(guild, table_data)
+    gm_entry = {
+        "id": get_gm_id(table_data),
+        "display_name": table_data.get("gm_display_name"),
+        "display_name_updated_at": table_data.get("gm_display_name_updated_at"),
+    }
+    entries.append(gm_entry)
+    resolvable: set[int] = set()
     stale_ids = {entry["id"] for entry in entries if _display_name_is_stale(entry, now)}
-    all_ids = {entry["id"] for entry in entries}
-    ids_to_resolve = stale_ids | (all_ids - resolvable)
     updates: dict[int, tuple[str, str]] = {}
     semaphore = asyncio.Semaphore(MAX_CONCURRENT_MEMBER_FETCHES)
 
@@ -76,7 +69,7 @@ async def refresh_table_members(
         if user_id in stale_ids:
             updates[user_id] = (member.display_name, refreshed_at)
 
-    await asyncio.gather(*(resolve(user_id) for user_id in ids_to_resolve))
+    await asyncio.gather(*(resolve(user_id) for user_id in stale_ids))
     return resolvable, updates
 
 
@@ -92,6 +85,9 @@ def apply_display_name_updates(
         table_data = active_tables.get(table_id)
         if table_data is None:
             return None
+        gm_update = updates.get(get_gm_id(table_data))
+        if gm_update is not None:
+            table_data["gm_display_name"], table_data["gm_display_name_updated_at"] = gm_update
         for bucket in (table_data.get("players", []), table_data.get("waitlist", [])):
             for entry in bucket:
                 update = updates.get(entry["id"])

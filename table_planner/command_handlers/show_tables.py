@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 import discord
 
 from ..storage import load_active_tables
-from ..member_resolution import apply_display_name_updates, cached_resolvable_ids, refresh_table_members
+from ..member_resolution import apply_display_name_updates, refresh_table_members
 from ..ui import create_table_embed
 from ..views import SignupView
 from ..discord_utils import safe_followup_send, safe_response_send
@@ -88,10 +88,9 @@ def register_show_tables(tree: discord.app_commands.CommandTree) -> None:
         )
 
         for table_id, table_data in channel_tables.items():
-            resolvable_ids = cached_resolvable_ids(interaction.guild, table_data)
             if interaction.guild is not None:
                 try:
-                    resolvable_ids, updates = await asyncio.wait_for(
+                    _, updates = await asyncio.wait_for(
                         refresh_table_members(interaction.guild, table_data),
                         timeout=10,
                     )
@@ -102,12 +101,11 @@ def register_show_tables(tree: discord.app_commands.CommandTree) -> None:
                     logger.warning("Member refresh timed out while showing table %s.", table_id)
                 except OSError as exc:
                     logger.error("Could not persist refreshed names for table %s: %s", table_id, exc)
-            embed = create_table_embed(table_data, table_id, resolvable_ids=resolvable_ids)
+            embed = create_table_embed(table_data, table_id)
             view = SignupView(
                 table_id,
                 table_data["max_players"],
                 len(table_data["players"]),
-                resolvable_ids=resolvable_ids,
             )
             await safe_followup_send(
                 interaction,

@@ -5,7 +5,6 @@ from unittest.mock import AsyncMock
 from table_planner import storage
 from table_planner.member_resolution import (
     apply_display_name_updates,
-    cached_resolvable_ids,
     refresh_table_members,
 )
 from table_planner.types import TableData
@@ -46,18 +45,7 @@ class _Guild:
         return self.cached.get(user_id)
 
 
-def test_cached_resolvable_ids_never_fetches() -> None:
-    guild = _Guild({1: _Member(1, "Cached")})
-    table = _table([
-        {"id": 1, "joined_at": "2026-01-01T00:00:00+00:00"},
-        {"id": 2, "joined_at": "2026-01-01T00:00:00+00:00"},
-    ])
-
-    assert cached_resolvable_ids(guild, table) == {1}
-    guild.fetch_member.assert_not_called()
-
-
-def test_refresh_fetches_uncached_members_even_when_their_saved_name_is_fresh() -> None:
+def test_refresh_fetches_only_stale_uncached_member_names() -> None:
     guild = _Guild({1: _Member(1, "Cached")})
     table = _table([
         {"id": 1, "joined_at": "2026-01-01T00:00:00+00:00"},
@@ -72,12 +60,11 @@ def test_refresh_fetches_uncached_members_even_when_their_saved_name_is_fresh() 
 
     resolvable, updates = asyncio.run(refresh_table_members(guild, table))
 
-    assert resolvable == {1, 2, 3}
+    assert resolvable == {1, 3}
     assert updates[1][0] == "Cached"
     assert updates[3][0] == "Fetched 3"
     assert 2 not in updates
-    assert guild.fetch_member.await_count == 2
-    assert {call.args[0] for call in guild.fetch_member.await_args_list} == {2, 3}
+    guild.fetch_member.assert_awaited_once_with(3)
 
 
 def test_refreshed_name_is_merged_into_latest_table(tmp_path, monkeypatch) -> None:
@@ -97,3 +84,6 @@ def test_refreshed_name_is_merged_into_latest_table(tmp_path, monkeypatch) -> No
     entry = storage.load_active_tables()["table-1"]["players"][0]
     assert entry["display_name"] == "Updated"
     assert entry["display_name_updated_at"] == "2026-08-03T20:00:00+00:00"
+    table = storage.load_active_tables()["table-1"]
+    assert table["gm_display_name"] == "Updated"
+    assert table["gm_display_name_updated_at"] == "2026-08-03T20:00:00+00:00"

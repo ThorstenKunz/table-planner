@@ -22,6 +22,7 @@ def _table() -> TableData:
         ],
         "creator_id": 10,
         "gm_id": 10,
+        "gm_display_name": "GM",
         "message_id": 20,
         "channel_id": 30,
         "guild_id": 40,
@@ -92,12 +93,12 @@ def test_setup_hook_resyncs_original_table_message(monkeypatch, caplog) -> None:
         asyncio.run(test_bot.setup_hook())
 
     assert len(test_bot.views) == 1
-    assert len(message.edits) == 2
+    assert len(message.edits) == 1
     embed = message.edits[-1]["embed"]
     assert embed.fields[3].name == "Players (2/2)"
-    assert embed.fields[3].value == "• <@1>\n• <@3>"
+    assert embed.fields[3].value == "• Player\n• Player 2"
     assert embed.fields[4].name == "Waitlist (1)"
-    assert embed.fields[4].value == "• <@2>"
+    assert embed.fields[4].value == "• Waiting"
     assert message.edits[-1]["view"] is test_bot.views[0]
     assert test_bot.views[0].join_btn.label == "Join Waitlist"
     assert test_bot.views[0].join_btn.style == bot_module.discord.ButtonStyle.grey

@@ -9,7 +9,7 @@ import discord
 from discord import app_commands
 
 from .storage import archive_tables, load_active_tables, remove_tables_for_channel, remove_tables_for_guild
-from .member_resolution import apply_display_name_updates, cached_resolvable_ids, refresh_table_members
+from .member_resolution import apply_display_name_updates, refresh_table_members
 from .types import ArchiveReason
 from .ui import create_table_embed
 from .views import SignupView
@@ -115,13 +115,7 @@ class TablePlannerBot(discord.Client):
 
             try:
                 message = await channel.fetch_message(info["message_id"])
-                cached_ids = cached_resolvable_ids(channel.guild, info)
-                view.update_resolvable_ids(cached_ids)
-                embed = create_table_embed(
-                    info,
-                    table_id,
-                    resolvable_ids=cached_ids,
-                )
+                embed = create_table_embed(info, table_id)
                 await message.edit(embed=embed, view=view)
                 synced_messages += 1
                 logger.info(
@@ -162,15 +156,9 @@ class TablePlannerBot(discord.Client):
                     refresh_table_members(channel.guild, info),
                     timeout=10,
                 )
-                view.update_resolvable_ids(resolvable_ids)
                 refreshed_table = apply_display_name_updates(table_id, updates) if updates else None
-                if refreshed_table is not None or resolvable_ids != cached_ids:
-                    display_table = refreshed_table or info
-                    refreshed_embed = create_table_embed(
-                        display_table,
-                        table_id,
-                        resolvable_ids=resolvable_ids,
-                    )
+                if refreshed_table is not None:
+                    refreshed_embed = create_table_embed(refreshed_table, table_id)
                     await message.edit(embed=refreshed_embed, view=view)
                     refreshed_messages += 1
                     logger.info(

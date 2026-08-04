@@ -28,6 +28,8 @@ class TableData(TypedDict):
     waitlist: List[PlayerEntry]
     creator_id: int
     gm_id: NotRequired[int | None]
+    gm_display_name: NotRequired[str]
+    gm_display_name_updated_at: NotRequired[str]
     message_id: int
     channel_id: int
     guild_id: int

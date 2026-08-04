@@ -58,5 +58,10 @@ def register_create_table(tree: discord.app_commands.CommandTree, bot: discord.C
                 )
                 return
 
-        modal = NewTableModal(bot, creator_id=interaction.user.id, gm_id=selected_gm.id)
+        modal = NewTableModal(
+            bot,
+            creator_id=interaction.user.id,
+            gm_id=selected_gm.id,
+            gm_display_name=selected_gm.display_name,
+        )
         await interaction.response.send_modal(modal)

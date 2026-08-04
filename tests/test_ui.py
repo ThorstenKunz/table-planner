@@ -17,6 +17,7 @@ def _table() -> TableData:
         "waitlist": [],
         "creator_id": 10,
         "gm_id": 10,
+        "gm_display_name": "Game Master",
         "message_id": 20,
         "channel_id": 30,
         "guild_id": 40,
@@ -26,13 +27,14 @@ def _table() -> TableData:
     }
 
 
-def test_member_display_prefers_confirmed_mention_then_name_then_plain_id() -> None:
-    embed = create_table_embed(_table(), "table-1", resolvable_ids={1})
-
-    assert embed.fields[3].value == "• <@1>\n• Saved Name\n• 3"
-
-
-def test_missing_resolution_context_never_creates_an_unconfirmed_mention() -> None:
+def test_member_display_prefers_name_then_plain_id_without_mention_syntax() -> None:
     embed = create_table_embed(_table(), "table-1")
 
+    assert embed.fields[1].value == "Game Master"
     assert embed.fields[3].value == "• Mentioned\n• Saved Name\n• 3"
+
+
+def test_embed_contains_no_user_mention_syntax() -> None:
+    embed = create_table_embed(_table(), "table-1")
+
+    assert all("<@" not in str(field.value) for field in embed.fields)

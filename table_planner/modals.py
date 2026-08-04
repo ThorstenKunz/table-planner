@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import uuid
 from datetime import datetime, timezone
@@ -10,7 +11,7 @@ import discord
 
 from .table_access import can_manage_table, get_gm_id, get_table_channel, resolve_table_member
 from .discord_utils import safe_followup_send
-from .member_resolution import cached_resolvable_ids
+from .member_resolution import apply_display_name_updates, refresh_table_members
 from .storage import load_tables, mutate_tables
 from .types import PlayerEntry, TableData, TablesDB
 from .ui import create_table_embed
@@ -63,11 +64,12 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
         max_length=1000
     )
 
-    def __init__(self, bot: discord.Client, creator_id: int, gm_id: int) -> None:
+    def __init__(self, bot: discord.Client, creator_id: int, gm_id: int, gm_display_name: str) -> None:
         super().__init__()
         self.bot = bot
         self.creator_id = creator_id
         self.gm_id = gm_id
+        self.gm_display_name = gm_display_name
 
     async def on_submit(self, interaction: discord.Interaction) -> None:
         user = interaction.user
@@ -134,6 +136,8 @@ class NewTableModal(discord.ui.Modal, title="Create a New Game Table"):
             "waitlist": [],
             "creator_id": self.creator_id,
             "gm_id": self.gm_id,
+            "gm_display_name": self.gm_display_name,
+            "gm_display_name_updated_at": datetime.now(timezone.utc).isoformat(),
             "message_id": 0,
             "channel_id": 0,
             "guild_id": interaction.guild_id or 0,
@@ -363,6 +367,8 @@ class EditTableModal(discord.ui.Modal):
             latest_table["infos"] = infos_value
             latest_table["max_players"] = max_players_int
             latest_table["gm_id"] = new_gm.id
+            latest_table["gm_display_name"] = new_gm.display_name
+            latest_table["gm_display_name_updated_at"] = datetime.now(timezone.utc).isoformat()
 
             moved: list[PlayerEntry] = []
             players = list(latest_table["players"])
@@ -381,13 +387,24 @@ class EditTableModal(discord.ui.Modal):
             await safe_followup_send(interaction, "This table no longer exists or was archived.", ephemeral=True)
             return
 
-        resolvable_ids = cached_resolvable_ids(interaction.guild, table_data)
-        embed = create_table_embed(table_data, self.table_id, resolvable_ids=resolvable_ids)
+        if interaction.guild is not None:
+            try:
+                _, updates = await asyncio.wait_for(
+                    refresh_table_members(interaction.guild, table_data),
+                    timeout=10,
+                )
+                refreshed_table = apply_display_name_updates(self.table_id, updates) if updates else None
+                if refreshed_table is not None:
+                    table_data = refreshed_table
+            except asyncio.TimeoutError:
+                logger.warning("Member refresh timed out while editing table %s.", self.table_id)
+            except OSError as exc:
+                logger.error("Could not persist refreshed names for table %s: %s", self.table_id, exc)
+        embed = create_table_embed(table_data, self.table_id)
         view = SignupView(
             self.table_id,
             table_data["max_players"],
             len(table_data["players"]),
-            resolvable_ids=resolvable_ids,
         )
 
         channel = await get_table_channel(self.bot, table_data["channel_id"])
